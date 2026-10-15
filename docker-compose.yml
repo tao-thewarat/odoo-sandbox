@@ -1,0 +1,59 @@
+# Local setup: docker compose up -d --build
+# Manager: http://localhost:8080   Sandboxes: http://<job id hex>.localhost:8080
+name: odoo-sandbox
+
+x-env: &env
+  # The worker passes paths under DATA_DIR to the host Docker daemon as bind
+  # mounts, so DATA_DIR must be the same absolute path inside and outside.
+  DATA_DIR: ${SANDBOX_DATA_DIR:-${PWD}/data}
+  SANDBOX_API_KEYS: ${SANDBOX_API_KEYS:-}
+  MAX_ACTIVE_PER_USER: ${MAX_ACTIVE_PER_USER:-2}
+  MAX_ACTIVE_TOTAL: ${MAX_ACTIVE_TOTAL:-6}
+  LAB_URL_TEMPLATE: ${LAB_URL_TEMPLATE:-http://{id}.localhost:8080}
+  LAB_PROXY_URL: http://odoo-sandbox-proxy
+  LAB_TTL_SECONDS: ${LAB_TTL_SECONDS:-7200}
+
+x-app: &app
+  build: .
+  image: odoo-sandbox-app
+  restart: unless-stopped
+  environment: *env
+  volumes:
+    - ${SANDBOX_DATA_DIR:-${PWD}/data}:${SANDBOX_DATA_DIR:-${PWD}/data}
+
+services:
+  api:
+    <<: *app
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    ports:
+      - "127.0.0.1:8000:8000"
+
+  worker:
+    <<: *app
+    command: ["python", "app/worker.py"]
+    environment:
+      <<: *env
+      # Credentials for pulling private Odoo images; only the worker gets them.
+      REGISTRY: ${REGISTRY:-ghcr.io}
+      REGISTRY_USER: ${REGISTRY_USER:-}
+      REGISTRY_TOKEN: ${REGISTRY_TOKEN:-}
+    volumes:
+      - ${SANDBOX_DATA_DIR:-${PWD}/data}:${SANDBOX_DATA_DIR:-${PWD}/data}
+      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on: [api, proxy]
+
+  proxy:
+    image: nginx:alpine
+    container_name: odoo-sandbox-proxy
+    restart: unless-stopped
+    environment:
+      SANDBOX_DOMAIN: ${SANDBOX_DOMAIN:-localhost}
+      MANAGER_AUTH: "off"
+    volumes:
+      - ./proxy/default.conf.template:/etc/nginx/templates/default.conf.template:ro
+    ports:
+      - "127.0.0.1:8080:80"
+
+networks:
+  default:
+    name: odoo-sandbox-proxy

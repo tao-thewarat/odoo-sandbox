@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="th">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Odoo Sandbox</title>
+<style>
+  :root { color-scheme: light dark; --line: #8884; --muted: #888; --accent: #714b67; }
+  body { font: 15px/1.5 system-ui, sans-serif; max-width: 960px; margin: 0 auto; padding: 16px; }
+  h1 { font-size: 1.4rem; }
+  form { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 16px; }
+  input, select, button { font: inherit; padding: 6px 10px; }
+  button { cursor: pointer; }
+  .primary { background: var(--accent); color: #fff; border: 0; border-radius: 4px; }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { text-align: left; padding: 8px 6px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  .muted, .error { color: var(--muted); font-size: .85rem; }
+  .error { color: #c33; white-space: pre-wrap; word-break: break-word; }
+  #message { min-height: 1.5em; }
+  .wrap { overflow-x: auto; }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<h1>Odoo Sandbox</h1>
+
+<form id="login">
+  <input id="token" type="password" placeholder="API token (sbx_...)" autocomplete="off" size="40" required aria-label="API token">
+  <button>Enter token</button>
+  <span id="whoami" class="muted"></span>
+</form>
+
+<form id="upload" hidden>
+  <select name="odoo_version" aria-label="Odoo version">
+    <option>20.0</option><option selected>19.0</option><option>18.0</option>
+  </select>
+  <input type="file" name="addon_zip" accept=".zip" required aria-label="Addon ZIP">
+  <button class="primary">Upload &amp; Run</button>
+</form>
+<p id="message" role="status"></p>
+
+<p class="muted">Login ทุก sandbox: <b>admin / admin</b> · ลบอัตโนมัติ 2 ชั่วโมงหลังพร้อมใช้งาน</p>
+<div class="wrap">
+<table>
+  <thead><tr><th>Job</th><th>Odoo</th><th>Status</th><th>URL</th><th></th></tr></thead>
+  <tbody id="jobs"></tbody>
+</table>
+</div>
+
+<script>
+const message = document.getElementById("message");
+const tbody = document.getElementById("jobs");
+const tokenInput = document.getElementById("token");
+const whoami = document.getElementById("whoami");
+const upload = document.getElementById("upload");
+let token = "";
+try { token = localStorage.getItem("sandboxToken") || ""; } catch {}
+
+async function api(path, options = {}) {
+  const response = await fetch(path, { ...options, headers: { ...options.headers, "X-API-Key": token } });
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(typeof body.detail === "string" ? body.detail : response.statusText);
+  return body;
+}
+
+// Every action runs as the token's owner, so jobs show who created them.
+async function signIn() {
+  upload.hidden = true;
+  tbody.replaceChildren();
+  if (!token) { whoami.textContent = "ใส่ token ก่อนใช้งาน"; return; }
+  try {
+    const { user } = await api("/api/me");
+    whoami.textContent = `ใช้งานในชื่อ: ${user}`;
+    upload.hidden = false;
+    refresh();
+  } catch (error) {
+    whoami.textContent = `Token ใช้ไม่ได้: ${error.message}`;
+    token = "";
+  }
+}
+
+document.getElementById("login").onsubmit = (event) => {
+  event.preventDefault();
+  token = tokenInput.value.trim();
+  try { localStorage.setItem("sandboxToken", token); } catch {}
+  tokenInput.value = "";
+  signIn();
+};
+
+upload.onsubmit = async (event) => {
+  event.preventDefault();
+  message.textContent = "กำลัง upload…";
+  try {
+    const job = await api("/api/jobs", { method: "POST", body: new FormData(event.target) });
+    message.textContent = `สร้าง job ${job.id.slice(0, 8)} แล้ว`;
+    event.target.reset();
+    refresh();
+  } catch (error) { message.textContent = error.message; }
+};
+
+const ACTIONS = { ready: ["stop", "delete"], stopped: ["start", "delete"], failed: ["delete"], queued: ["delete"] };
+
+function cell(row, content) {
+  const td = row.insertCell();
+  if (content instanceof Node) td.append(content); else td.textContent = content ?? "";
+  return td;
+}
+
+async function refresh() {
+  if (upload.hidden) return;
+  let jobs;
+  try { jobs = await api("/api/jobs"); } catch (error) { message.textContent = error.message; return; }
+  tbody.replaceChildren();
+  for (const job of jobs) {
+    const row = tbody.insertRow();
+    const id = cell(row, job.id.slice(0, 8));
+    id.title = job.id;
+    if (job.owner) id.append(Object.assign(document.createElement("div"), { className: "muted", textContent: job.owner }));
+    cell(row, job.odoo_version);
+    const status = cell(row, job.status);
+    if (job.error) status.append(Object.assign(document.createElement("div"), { className: "error", textContent: job.error }));
+    cell(row, job.url ? Object.assign(document.createElement("a"), { href: job.url, target: "_blank", rel: "noopener", textContent: "เปิด Odoo" }) : "");
+    const buttons = cell(row, "");
+    for (const action of ACTIONS[job.status] || []) {
+      const button = Object.assign(document.createElement("button"), { textContent: action });
+      button.onclick = async () => {
+        button.disabled = true;
+        try { await api(`/api/jobs/${job.id}/${action}`, { method: "POST" }); } catch (error) { message.textContent = error.message; }
+        refresh();
+      };
+      buttons.append(button, " ");
+    }
+  }
+}
+
+signIn();
+setInterval(refresh, 4000);
+</script>
+</body>
+</html>
