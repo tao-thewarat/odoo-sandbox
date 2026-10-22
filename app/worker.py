@@ -233,7 +233,7 @@ def prepare(job, modules, roots):
         f"db_password = {password}\n"
         "db_name = lab\ndbfilter = ^lab$\nlist_db = False\nproxy_mode = True\nhttp_interface = 0.0.0.0\n"
         "data_dir = /var/lib/odoo\n"
-        "addons_path = /usr/lib/python3/dist-packages/odoo/addons,"
+        "addons_path = /usr/lib/python3/dist-packages/odoo/addons,/mnt/enterprise,"
         + ",".join("/mnt/extra-addons" + ("" if r == "." else "/" + r) for r in roots)
         + "\nworkers = 0\nmax_cron_threads = 0\n",
         encoding="utf-8",
@@ -265,6 +265,7 @@ def prepare(job, modules, roots):
                 "depends_on": {"db": {"condition": "service_healthy"}},
                 "volumes": [
                     str(folder / "addons") + ":/mnt/extra-addons:ro",
+                    "/path/to/enterprise:/mnt/enterprise:ro",
                     str(config) + ":/etc/odoo/odoo.conf:ro",
                     "odoo-data:/var/lib/odoo",
                 ],
