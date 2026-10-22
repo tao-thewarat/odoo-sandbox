@@ -95,8 +95,10 @@ def registry_login():
         input=token, text=True, capture_output=True, timeout=60,
     )  # fmt: skip
     if result.returncode:
-        raise SystemExit(f"docker login {registry} failed: {result.stderr.strip()}")
-    LOG.info("Logged in to %s as %s", registry, user)
+        # Keep running: public and already-pulled images still work.
+        LOG.error("docker login %s failed: %s", registry, result.stderr.strip())
+    else:
+        LOG.info("Logged in to %s as %s", registry, user)
 
 
 def reattach_proxy():
@@ -265,7 +267,7 @@ def prepare(job, modules, roots):
                 "depends_on": {"db": {"condition": "service_healthy"}},
                 "volumes": [
                     str(folder / "addons") + ":/mnt/extra-addons:ro",
-                    "/path/to/enterprise:/mnt/enterprise:ro",
+                    # /mnt/enterprise ships inside the odoo-ee image; never mount over it.
                     str(config) + ":/etc/odoo/odoo.conf:ro",
                     "odoo-data:/var/lib/odoo",
                 ],
