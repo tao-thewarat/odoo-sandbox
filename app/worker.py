@@ -225,7 +225,7 @@ def extract_addons(archive, target, serie):
     return sorted(modules), sorted(roots)
 
 
-def prepare(job, modules, roots):
+def prepare(job, roots):
     folder = directory(job["id"])
     password = secrets.token_hex(24)
     community = job["edition"] == "community"
@@ -351,7 +351,7 @@ def run_job(job):
         archive = folder / "addon.zip"
         modules, roots = extract_addons(archive, folder / "addons", job["odoo_version"])
         update(job_id, "provisioning")
-        prepare(job, modules, roots)
+        prepare(job, roots)
         compose(job_id, "pull", "--policy", "missing", timeout=900)
         compose(job_id, "up", "-d", "--wait", "--wait-timeout", "90", "db", timeout=120)
         update(job_id, "installing")
