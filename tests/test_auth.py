@@ -141,7 +141,6 @@ class AuthTest(unittest.TestCase):
                 files={"addon_zip": ("shared.zip", addon)},
             ).json()
         self.assertIn(job["id"], [row["id"] for row in other.get("/api/jobs").json()])
-        self.assertEqual(other.get(f"/api/jobs/{job['id']}").status_code, 200)
         self.assertEqual(other.post(f"/api/jobs/{job['id']}/delete", headers=ORIGIN).status_code, 403)
         self.assertEqual(set(admin.get("/api/stats").json()), {"environments"})
         self.assertEqual(admin.post(f"/api/jobs/{job['id']}/delete", headers=ORIGIN).status_code, 202)

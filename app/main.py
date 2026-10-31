@@ -3,7 +3,6 @@ import hashlib
 import json
 import logging
 import os
-import re
 import secrets
 import shutil
 import sqlite3
@@ -17,7 +16,7 @@ from pathlib import Path
 from typing import Annotated, Literal, NamedTuple
 from uuid import UUID, uuid4
 
-from fastapi import Body, Depends, FastAPI, File, Form, Header, HTTPException, Request, UploadFile
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import RedirectResponse, Response
 from pydantic import BaseModel
 
@@ -46,19 +45,6 @@ ACCESS_TOKEN_TTL = int(os.getenv("ACCESS_TOKEN_TTL_SECONDS", "900"))
 REFRESH_TOKEN_TTL = int(os.getenv("REFRESH_TOKEN_TTL_SECONDS", str(30 * 24 * 3600)))
 SECURE_COOKIES = OIDC_REDIRECT_URI.startswith("https://")
 
-# SANDBOX_API_KEYS="alice:<key>,bob:<key>"; the "admin" user sees every job.
-API_KEYS = {
-    key: user
-    for user, _, key in (
-        item.strip().partition(":")
-        for item in os.getenv("SANDBOX_API_KEYS", "").split(",")
-        if item.strip()
-    )
-}
-if not all(user and len(key) >= 16 for key, user in API_KEYS.items()):
-    raise RuntimeError("SANDBOX_API_KEYS must be 'user:key,...' (keys of 16+ chars)")
-
-
 def connect():
     connection = sqlite3.connect(DATABASE, timeout=10)
     connection.row_factory = sqlite3.Row
@@ -82,14 +68,6 @@ async def lifespan(app: FastAPI):
                 owner TEXT,
                 edition TEXT NOT NULL DEFAULT 'enterprise',
                 name TEXT
-            )
-        """)
-        connection.execute("""
-            CREATE TABLE IF NOT EXISTS tokens (
-                id TEXT PRIMARY KEY,
-                name TEXT NOT NULL,
-                token_hash TEXT NOT NULL UNIQUE,
-                created_at TEXT NOT NULL
             )
         """)
         connection.execute("""
@@ -137,19 +115,7 @@ def check_same_origin(request: Request) -> None:
         raise HTTPException(status_code=403, detail="Cross-origin request rejected")
 
 
-def current_user(request: Request, x_api_key: Annotated[str, Header()] = "") -> Principal:
-    if x_api_key:
-        for key, user in API_KEYS.items():
-            if secrets.compare_digest(key.encode(), x_api_key.encode()):
-                return Principal(user, user == "admin", user)
-        with closing(connect()) as connection:
-            token = connection.execute(
-                "SELECT name FROM tokens WHERE token_hash = ?", (hash_token(x_api_key),)
-            ).fetchone()
-        if token:
-            return Principal(token["name"], False, token["name"])
-        raise HTTPException(status_code=401, detail="Invalid API key")
-
+def current_user(request: Request) -> Principal:
     access = request.cookies.get(ACCESS_COOKIE)
     if access:
         with closing(connect()) as connection:
@@ -479,12 +445,6 @@ def load_job(connection, job_id: UUID):
     return dict(job)
 
 
-@app.get("/api/jobs/{job_id}", response_model=JobResponse)
-def get_job(job_id: UUID, user: User):
-    with closing(connect()) as connection:
-        return load_job(connection, job_id)
-
-
 # action -> (statuses it is allowed from, status the worker picks up)
 ACTIONS = {
     "stop": (("ready",), "stop_requested"),
@@ -530,69 +490,3 @@ def stats():
             f"SELECT count(*) FROM jobs WHERE status NOT IN ({marks})", INACTIVE
         ).fetchone()[0]
     return {"environments": environments}
-
-
-class TokenResponse(BaseModel):
-    id: str
-    name: str
-    created_at: str
-    token: str | None = None  # Only returned once, on creation.
-
-
-@app.post(
-    "/api/tokens",
-    response_model=TokenResponse,
-    status_code=201,
-    dependencies=[Depends(require_admin)],
-)
-def create_token(name: Annotated[str, Body(embed=True)]):
-    # The name becomes the job owner, so it must not grant admin rights.
-    if not re.fullmatch(r"[A-Za-z0-9_.-]{1,40}", name) or name == "admin":
-        raise HTTPException(
-            status_code=400,
-            detail="Name must be 1-40 letters, digits, '.', '_' or '-' and not 'admin'",
-        )
-
-    token = "sbx_" + secrets.token_urlsafe(32)
-    row = {
-        "id": str(uuid4()),
-        "name": name,
-        "created_at": datetime.now(timezone.utc).isoformat(),
-    }
-    with closing(connect()) as connection:
-        connection.execute(
-            "INSERT INTO tokens (id, name, token_hash, created_at) VALUES (?, ?, ?, ?)",
-            (row["id"], name, hash_token(token), row["created_at"]),
-        )
-        connection.commit()
-
-    return {**row, "token": token}
-
-
-@app.get(
-    "/api/tokens",
-    response_model=list[TokenResponse],
-    dependencies=[Depends(require_admin)],
-)
-def list_tokens():
-    with closing(connect()) as connection:
-        rows = connection.execute(
-            "SELECT id, name, created_at FROM tokens ORDER BY created_at DESC"
-        ).fetchall()
-    return [dict(row) for row in rows]
-
-
-@app.delete(
-    "/api/tokens/{token_id}",
-    status_code=204,
-    dependencies=[Depends(require_admin)],
-)
-def revoke_token(token_id: UUID):
-    with closing(connect()) as connection:
-        deleted = connection.execute(
-            "DELETE FROM tokens WHERE id = ?", (str(token_id),)
-        ).rowcount
-        connection.commit()
-
-    if not deleted:
-        raise HTTPException(status_code=404, detail="Token not found")

@@ -6,7 +6,6 @@ x-env: &env
   # The worker passes paths under DATA_DIR to the host Docker daemon as bind
   # mounts, so DATA_DIR must be the same absolute path inside and outside.
   DATA_DIR: ${SANDBOX_DATA_DIR:-${PWD}/data}
-  SANDBOX_API_KEYS: ${SANDBOX_API_KEYS:-}
   MAX_ACTIVE_PER_USER: ${MAX_ACTIVE_PER_USER:-2}
   MAX_ACTIVE_TOTAL: ${MAX_ACTIVE_TOTAL:-6}
   LAB_URL_TEMPLATE: ${LAB_URL_TEMPLATE:-http://{id}.localhost:8080}

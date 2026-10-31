@@ -83,13 +83,9 @@ tail -f data/jobs/<job id>/worker.log        # docker/Odoo output for one job
 | `GET` | `/api/me` | Returns the caller: `user`, `display_name`, `is_admin`. |
 | `GET` | `/api/stats` | Admin only. Returns the total as `environments`. |
 | `GET` | `/api/jobs` | Lists every user's jobs (newest first). |
-| `GET` | `/api/jobs/{id}` | Returns one job: `status`, `url`, `error`. |
 | `POST` | `/api/jobs/{id}/stop` | Owner or admin. Stops a `ready` sandbox and keeps its data. |
 | `POST` | `/api/jobs/{id}/start` | Owner or admin. Starts a `stopped` sandbox again. |
 | `POST` | `/api/jobs/{id}/delete` | Owner or admin. Removes containers, volumes, and files. |
-| `POST` | `/api/tokens` | Admin only. JSON `{"name": "fc-somchai"}`. Returns the token once. |
-| `GET` | `/api/tokens` | Admin only. Lists token names (not the tokens themselves). |
-| `DELETE` | `/api/tokens/{id}` | Admin only. Revokes a token. |
 
 ### Microsoft sign-in
 
@@ -100,38 +96,13 @@ database stores only their SHA-256 hashes. Each refresh replaces both tokens.
 1. In the app registration, add a **Web** redirect URI that matches
    `OIDC_REDIRECT_URI`. Locally this is `http://localhost:5173/auth/callback`.
 2. Create a client secret and put it in `.env` as `OIDC_CLIENT_SECRET`.
-3. Assign the app role with value `admin` to admins. Admins see `/api/stats`, can
-   change any job, and can manage tokens. Everyone in the tenant can sign in, create
+3. Assign the app role with value `admin` to admins. Admins see `/api/stats` and can
+   change any job. Everyone in the tenant can sign in, create
    sandboxes, see every job, and change their own jobs.
 
 Role changes apply at the next Microsoft sign-in. Each refresh resets the refresh token
 to `REFRESH_TOKEN_TTL_SECONDS`, so users sign in again only after that long without use.
 To remove someone's access at once, delete their rows from `auth_tokens`.
-
-### API tokens
-
-Scripts and other systems call the API with a token in the `X-API-Key` header.
-
-1. Generate a token with `POST /api/tokens` as admin. The response shows the token
-   once. The database stores only its SHA-256 hash.
-2. Jobs created with a token belong to the token's name. A token can change only its
-   own jobs, and the per-user quota counts its jobs separately from other tokens.
-3. Revoke a token with `DELETE /api/tokens/{id}`. Requests with that token then get
-   `401`.
-
-```bash
-# Generate, list, and revoke need an admin: use an admin:<key> from SANDBOX_API_KEYS
-curl -X POST -H "X-API-Key: <admin key>" -H 'Content-Type: application/json' \
-  -d '{"name": "fc-somchai"}' https://sandbox.example.com/api/tokens
-curl -H "X-API-Key: <admin key>" https://sandbox.example.com/api/tokens
-curl -X DELETE -H "X-API-Key: <admin key>" https://sandbox.example.com/api/tokens/<token id>
-
-# Use
-curl -H "X-API-Key: sbx_..." -F odoo_version=19.0 -F addon_zip=@my_addon.zip \
-  https://sandbox.example.com/api/jobs
-```
-
-Requests without a valid key or access token get `401`. An unknown key gets `401` too.
 
 ### ZIP rules
 
@@ -162,7 +133,6 @@ Set these in the shell or in `.env` next to the compose files.
 | `ACCESS_TOKEN_TTL_SECONDS` | `900` | How long an access token lasts. |
 | `REFRESH_TOKEN_TTL_SECONDS` | `2592000` | Time without use (30 days) before Microsoft sign-in is required again. |
 | `REGISTRY`, `REGISTRY_USER`, `REGISTRY_TOKEN` | `ghcr.io`, empty, empty | Worker only. Logs in to pull private images. For GHCR, use a token with `read:packages`. |
-| `SANDBOX_API_KEYS` | empty | Optional fixed `user:key,...` pairs. An `admin:<key>` entry is the way for scripts to manage tokens. |
 
 ## Production
 
