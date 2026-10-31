@@ -40,8 +40,7 @@ tests/
 examples/
   ibase_billing_note.zip   Sample addon (Odoo 20.0)
 Dockerfile                 Image for api and worker (Python + docker CLI)
-docker-compose.yml         Local stack
-docker-compose.prod.yml    Production overrides
+docker-compose.yml         Local and production stack
 .env.example               Production settings
 data/                      Runtime state: SQLite DB, uploaded ZIPs, per-job logs (git-ignored)
 ```
@@ -152,7 +151,7 @@ Set these in the shell or in `.env` next to the compose files.
 | `SANDBOX_DOMAIN` | `localhost` | Host name of the UI and API. Sandboxes are served from its subdomains. |
 | `LAB_URL_TEMPLATE` | `http://{id}.localhost:8080` | Sandbox URL returned by the API. `{id}` is the job ID without dashes. |
 | `SANDBOX_DATA_DIR` | `$PWD/data` | Absolute host path for runtime data. |
-| `PROXY_BIND` | `0.0.0.0:80` | Production only: the address the proxy listens on. |
+| `PROXY_BIND` | `127.0.0.1:8080` | Address the proxy listens on. Use `0.0.0.0:80` in production. |
 | `MAX_ACTIVE_PER_USER` | `2` | Sandboxes per user that are not `failed` or `deleted`. |
 | `MAX_ACTIVE_TOTAL` | `6` | Server-wide cap. Each sandbox can use up to 1.5 CPU and 2 GB RAM. |
 | `LAB_TTL_SECONDS` | `7200` | Seconds a sandbox stays available after it becomes ready. |
@@ -162,7 +161,6 @@ Set these in the shell or in `.env` next to the compose files.
 | `OIDC_REDIRECT_URI` | `http://localhost:5173/auth/callback` | Must match the Web redirect URI in Entra. `https://` also makes cookies `Secure`. |
 | `ACCESS_TOKEN_TTL_SECONDS` | `900` | How long an access token lasts. |
 | `REFRESH_TOKEN_TTL_SECONDS` | `2592000` | Time without use (30 days) before Microsoft sign-in is required again. |
-| `UI_DIST_DIR` | none | Production only: absolute path of the `odoo-sandbox-ui` build (`dist`). |
 | `REGISTRY`, `REGISTRY_USER`, `REGISTRY_TOKEN` | `ghcr.io`, empty, empty | Worker only. Logs in to pull private images. For GHCR, use a token with `read:packages`. |
 | `SANDBOX_API_KEYS` | empty | Optional fixed `user:key,...` pairs. An `admin:<key>` entry is the way for scripts to manage tokens. |
 
@@ -181,15 +179,14 @@ Set these in the shell or in `.env` next to the compose files.
    cp .env.example .env    # set SANDBOX_DOMAIN, LAB_URL_TEMPLATE (https://{id}...), SANDBOX_DATA_DIR
    mkdir -p /srv/odoo-sandbox/data
    ```
-4. **UI and sign-in:** run `npm run build` in `odoo-sandbox-ui`, set `UI_DIST_DIR` to
-   its `dist` folder, and add the production Web redirect URI in Entra.
+4. **UI:** deploy `odoo-sandbox-ui` on the same `SANDBOX_DOMAIN` with `BACKEND_URL`
+   pointing at this proxy, and add the production Web redirect URI in Entra.
 5. **Start:**
    ```bash
-   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
+   docker compose up -d --build
    ```
 
-In production, the API port is not published, so the proxy is the only way in. To
-pre-pull the Odoo images and make the first job faster, run
+To pre-pull the Odoo images and make the first job faster, run
 `docker pull ghcr.io/imotif/odoo-ee:20.0 postgres:16` (and any other versions you use).
 The worker pulls an image only when it is missing on the host.
 

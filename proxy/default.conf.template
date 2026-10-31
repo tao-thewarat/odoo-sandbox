@@ -19,14 +19,13 @@ server {
     return 404;
 }
 
-# UI (static build, production only) and API.
+# API; the UI is deployed separately and forwards /api and /auth here.
 server {
     listen 80;
     server_name ${SANDBOX_DOMAIN};
-    root /usr/share/nginx/html;
 
     location / {
-        try_files $uri /index.html;
+        return 404;
     }
 
     location ~ ^/(api|auth|health)(/|$) {
