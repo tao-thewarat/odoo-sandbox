@@ -1,4 +1,4 @@
-# Rendered by the nginx image's envsubst: ${SANDBOX_DOMAIN} and ${MANAGER_AUTH} come
+# Rendered by the nginx image's envsubst: ${SANDBOX_DOMAIN} comes
 # from docker-compose; nginx's own $variables are left untouched.
 
 map $http_upgrade $connection_upgrade {
@@ -12,12 +12,6 @@ map $http_x_forwarded_proto $forwarded_proto {
     ''      $scheme;
 }
 
-# Requests with an X-API-Key skip basic auth; the API validates the key itself.
-map $http_x_api_key $manager_auth {
-    ''      ${MANAGER_AUTH};
-    default off;
-}
-
 resolver 127.0.0.11 valid=10s ipv6=off;
 
 server {
@@ -25,20 +19,25 @@ server {
     return 404;
 }
 
-# Manager page and API.
+# UI (static build, production only) and API.
 server {
     listen 80;
     server_name ${SANDBOX_DOMAIN};
-    client_max_body_size 25m;
-    auth_basic $manager_auth;
-    auth_basic_user_file /etc/nginx/htpasswd;
+    root /usr/share/nginx/html;
 
     location / {
+        try_files $uri /index.html;
+    }
+
+    location ~ ^/(api|auth|health)(/|$) {
+        client_max_body_size 0;
+        proxy_request_buffering off;
         set $api http://api:8000;
         proxy_pass $api;
         proxy_set_header Host $host;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $forwarded_proto;
+        proxy_read_timeout 720s;
     }
 }
 

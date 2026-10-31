@@ -32,6 +32,9 @@ IMAGES = {v: os.getenv(f"ODOO_IMAGE_{v[:2]}", f"ghcr.io/imotif/odoo-ee:{v}") for
 PROXY = "odoo-sandbox-proxy"  # Container and network name from docker-compose.yml.
 PROXY_URL = os.getenv("LAB_PROXY_URL", "http://127.0.0.1:8080")
 URL_TEMPLATE = os.getenv("LAB_URL_TEMPLATE", "http://{id}.localhost:8080")
+COMMUNITY_IMAGES = {v: os.getenv(f"ODOO_COMMUNITY_IMAGE_{v[:2]}", f"odoo:{v}") for v in IMAGES}
+MAX_ENTRIES = int(os.getenv("ZIP_MAX_ENTRIES", "100000"))
+MAX_UNCOMPRESSED = int(os.getenv("ZIP_MAX_UNCOMPRESSED_MB", "5120")) * 1024 * 1024
 TTL = int(os.getenv("LAB_TTL_SECONDS", "7200"))
 LOG = logging.getLogger("lab-worker")
 BUSY = ("validating", "provisioning", "installing", "starting")
@@ -154,10 +157,10 @@ def extract_addons(archive, target, serie):
         raise ValueError("Extraction directory already exists")
     with zipfile.ZipFile(archive) as z:
         entries = z.infolist()
-        if len(entries) > 5000:
+        if len(entries) > MAX_ENTRIES:
             raise ValueError("ZIP has too many entries")
-        if sum(i.file_size for i in entries) > 200 * 1024 * 1024:
-            raise ValueError("Uncompressed ZIP exceeds 200 MB")
+        if sum(i.file_size for i in entries) > MAX_UNCOMPRESSED:
+            raise ValueError("Uncompressed ZIP is too large; see ZIP_MAX_UNCOMPRESSED_MB")
         selected = []
         seen = set()
         for info in entries:
@@ -176,8 +179,6 @@ def extract_addons(archive, target, serie):
                 raise ValueError("ZIP contains a symlink or special file")
             if info.flag_bits & 1:
                 raise ValueError("Encrypted ZIP is unsupported")
-            if info.file_size > 20 * 1024 * 1024:
-                raise ValueError("ZIP entry exceeds 20 MB")
             if info.file_size > max(info.compress_size, 1) * 1000:
                 raise ValueError("Suspicious ZIP compression ratio")
             if "__MACOSX" in path.parts or path.name == ".DS_Store":
@@ -227,6 +228,7 @@ def extract_addons(archive, target, serie):
 def prepare(job, modules, roots):
     folder = directory(job["id"])
     password = secrets.token_hex(24)
+    community = job["edition"] == "community"
     config = folder / "odoo.conf"
     config.write_text(
         "[options]\n"
@@ -235,7 +237,8 @@ def prepare(job, modules, roots):
         f"db_password = {password}\n"
         "db_name = lab\ndbfilter = ^lab$\nlist_db = False\nproxy_mode = True\nhttp_interface = 0.0.0.0\n"
         "data_dir = /var/lib/odoo\n"
-        "addons_path = /usr/lib/python3/dist-packages/odoo/addons,/mnt/enterprise,"
+        "addons_path = /usr/lib/python3/dist-packages/odoo/addons,"
+        + ("" if community else "/mnt/enterprise,")
         + ",".join("/mnt/extra-addons" + ("" if r == "." else "/" + r) for r in roots)
         + "\nworkers = 0\nmax_cron_threads = 0\n",
         encoding="utf-8",
@@ -262,7 +265,7 @@ def prepare(job, modules, roots):
                 },
             },
             "odoo": {
-                "image": IMAGES[job["odoo_version"]],
+                "image": (COMMUNITY_IMAGES if community else IMAGES)[job["odoo_version"]],
                 "environment": {"HOST": "db", "USER": "odoo", "PASSWORD": password},
                 "depends_on": {"db": {"condition": "service_healthy"}},
                 "volumes": [

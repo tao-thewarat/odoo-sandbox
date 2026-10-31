@@ -1,5 +1,5 @@
 # Local setup: docker compose up -d --build
-# Manager: http://localhost:8080   Sandboxes: http://<job id hex>.localhost:8080
+# API: http://localhost:8080/api   Sandboxes: http://<job id hex>.localhost:8080
 name: odoo-sandbox
 
 x-env: &env
@@ -24,6 +24,15 @@ x-app: &app
 services:
   api:
     <<: *app
+    environment:
+      <<: *env
+      # Microsoft sign-in; only the API gets the client secret.
+      OIDC_TENANT_ID: ${OIDC_TENANT_ID:-}
+      OIDC_CLIENT_ID: ${OIDC_CLIENT_ID:-}
+      OIDC_CLIENT_SECRET: ${OIDC_CLIENT_SECRET:-}
+      OIDC_REDIRECT_URI: ${OIDC_REDIRECT_URI:-http://localhost:5173/auth/callback}
+      ACCESS_TOKEN_TTL_SECONDS: ${ACCESS_TOKEN_TTL_SECONDS:-900}
+      REFRESH_TOKEN_TTL_SECONDS: ${REFRESH_TOKEN_TTL_SECONDS:-2592000}
     command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
     ports:
       - "127.0.0.1:8000:8000"
@@ -48,7 +57,6 @@ services:
     restart: unless-stopped
     environment:
       SANDBOX_DOMAIN: ${SANDBOX_DOMAIN:-localhost}
-      MANAGER_AUTH: "off"
     volumes:
       - ./proxy/default.conf.template:/etc/nginx/templates/default.conf.template:ro
     ports:

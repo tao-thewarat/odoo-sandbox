@@ -8,7 +8,7 @@ developer setting up an environment.
 ## How it works
 
 ```
-browser ──► proxy (nginx) ──┬── <SANDBOX_DOMAIN>          ──► api (FastAPI + manager page)
+browser ──► proxy (nginx) ──┬── <SANDBOX_DOMAIN>          ──► React UI (odoo-sandbox-ui) + api (FastAPI)
                             └── <job id>.<SANDBOX_DOMAIN> ──► lab-<job id>  (Odoo)
                                                                    │
 api ──► data/lab.sqlite3 ◄── worker ──► host Docker ──► per-job compose project:
@@ -31,11 +31,12 @@ that the worker picks up.
 
 ```
 app/
-  main.py                  API and quota checks; serves the manager page at /
+  main.py                  API, Microsoft sign-in, sessions, and quota checks
   worker.py                Job runner (stdlib only): ZIP checks, docker compose, cleanup
-  manager.html             Manager UI: upload, status, open/stop/start/delete
 proxy/
-  default.conf.template    nginx config for the manager host and per-sandbox subdomains
+  default.conf.template    nginx config for the UI/API host and per-sandbox subdomains
+tests/
+  test_auth.py             Sign-in, session, role, and CSRF checks
 examples/
   ibase_billing_note.zip   Sample addon (Odoo 20.0)
 Dockerfile                 Image for api and worker (Python + docker CLI)
@@ -53,7 +54,8 @@ Requirements: Docker Desktop (or Docker Engine) with Compose v2.
 docker compose up -d --build
 ```
 
-- Manager: <http://localhost:8080> (or the API directly at <http://127.0.0.1:8000>)
+- UI: run `npm run dev` in `odoo-sandbox-ui`, then open <http://localhost:5173>. Vite forwards `/api` and `/auth` to the proxy on port 8080.
+- Set `OIDC_TENANT_ID`, `OIDC_CLIENT_ID`, and `OIDC_CLIENT_SECRET` in `.env` first (see [Microsoft sign-in](#microsoft-sign-in)).
 - Sandboxes: `http://<job id without dashes>.localhost:8080`, login `admin` / `admin`
 
 `*.localhost` resolves to your own machine in Chrome, Firefox, and curl. If a browser
@@ -74,21 +76,38 @@ tail -f data/jobs/<job id>/worker.log        # docker/Odoo output for one job
 
 | Method | Path | Description |
 |---|---|---|
-| `POST` | `/api/jobs` | Form fields `odoo_version` (`18.0`, `19.0`, `20.0`) and `addon_zip`. Returns `202` with the job. |
-| `GET` | `/api/me` | Returns the user name of the caller (`{"user": "fc-somchai"}`). |
-| `GET` | `/api/jobs` | Lists jobs (newest first). |
+| `GET` | `/auth/login` | Redirects to Microsoft sign-in. |
+| `GET` | `/auth/callback` | Microsoft redirect target. Sets the access and refresh token cookies. |
+| `POST` | `/auth/refresh` | Rotates both tokens using the refresh token cookie. |
+| `POST` | `/auth/logout` | Revokes both tokens here. The Microsoft session stays signed in. |
+| `POST` | `/api/jobs` | Form fields `odoo_version` (`18.0`, `19.0`, `20.0`), `addon_zip`, and optional `edition` (`enterprise` by default, or `community`). Returns `202` with the job. |
+| `GET` | `/api/me` | Returns the caller: `user`, `display_name`, `is_admin`. |
+| `GET` | `/api/stats` | Admin only. Returns the total as `environments`. |
+| `GET` | `/api/jobs` | Lists every user's jobs (newest first). |
 | `GET` | `/api/jobs/{id}` | Returns one job: `status`, `url`, `error`. |
-| `POST` | `/api/jobs/{id}/stop` | Stops a `ready` sandbox and keeps its data. |
-| `POST` | `/api/jobs/{id}/start` | Starts a `stopped` sandbox again. |
-| `POST` | `/api/jobs/{id}/delete` | Removes containers, volumes, and files. |
+| `POST` | `/api/jobs/{id}/stop` | Owner or admin. Stops a `ready` sandbox and keeps its data. |
+| `POST` | `/api/jobs/{id}/start` | Owner or admin. Starts a `stopped` sandbox again. |
+| `POST` | `/api/jobs/{id}/delete` | Owner or admin. Removes containers, volumes, and files. |
 | `POST` | `/api/tokens` | Admin only. JSON `{"name": "fc-somchai"}`. Returns the token once. |
 | `GET` | `/api/tokens` | Admin only. Lists token names (not the tokens themselves). |
 | `DELETE` | `/api/tokens/{id}` | Admin only. Revokes a token. |
 
-```bash
-curl -F odoo_version=20.0 -F addon_zip=@examples/ibase_billing_note.zip http://localhost:8080/api/jobs
-curl http://localhost:8080/api/jobs/<job id>
-```
+### Microsoft sign-in
+
+The API handles the whole sign-in with the Entra app `Odoo Sandbox`. It then issues
+its own access and refresh tokens in `HttpOnly` cookies. Both are random values, and the
+database stores only their SHA-256 hashes. Each refresh replaces both tokens.
+
+1. In the app registration, add a **Web** redirect URI that matches
+   `OIDC_REDIRECT_URI`. Locally this is `http://localhost:5173/auth/callback`.
+2. Create a client secret and put it in `.env` as `OIDC_CLIENT_SECRET`.
+3. Assign the app role with value `admin` to admins. Admins see `/api/stats`, can
+   change any job, and can manage tokens. Everyone in the tenant can sign in, create
+   sandboxes, see every job, and change their own jobs.
+
+Role changes apply at the next Microsoft sign-in. Each refresh resets the refresh token
+to `REFRESH_TOKEN_TTL_SECONDS`, so users sign in again only after that long without use.
+To remove someone's access at once, delete their rows from `auth_tokens`.
 
 ### API tokens
 
@@ -96,38 +115,31 @@ Scripts and other systems call the API with a token in the `X-API-Key` header.
 
 1. Generate a token with `POST /api/tokens` as admin. The response shows the token
    once. The database stores only its SHA-256 hash.
-2. Jobs created with a token belong to the token's name. A token sees only its own
-   jobs, and the per-user quota counts its jobs separately from other tokens.
+2. Jobs created with a token belong to the token's name. A token can change only its
+   own jobs, and the per-user quota counts its jobs separately from other tokens.
 3. Revoke a token with `DELETE /api/tokens/{id}`. Requests with that token then get
    `401`.
 
 ```bash
-# Generate (locally the API is open; in production add -u <basic auth user>:<password>)
-curl -X POST -H 'Content-Type: application/json' -d '{"name": "fc-somchai"}' \
-  https://sandbox.example.com/api/tokens
-
-# List and revoke
-curl https://sandbox.example.com/api/tokens
-curl -X DELETE https://sandbox.example.com/api/tokens/<token id>
+# Generate, list, and revoke need an admin: use an admin:<key> from SANDBOX_API_KEYS
+curl -X POST -H "X-API-Key: <admin key>" -H 'Content-Type: application/json' \
+  -d '{"name": "fc-somchai"}' https://sandbox.example.com/api/tokens
+curl -H "X-API-Key: <admin key>" https://sandbox.example.com/api/tokens
+curl -X DELETE -H "X-API-Key: <admin key>" https://sandbox.example.com/api/tokens/<token id>
 
 # Use
 curl -H "X-API-Key: sbx_..." -F odoo_version=19.0 -F addon_zip=@my_addon.zip \
   https://sandbox.example.com/api/jobs
 ```
 
-The manager page asks for a token too, so every job shows who created it. The page
-keeps the token in the browser's local storage.
-
-Who is `admin`: anyone who uses the manager page (protected by basic auth in
-production, open locally), or an `admin:<key>` entry in `SANDBOX_API_KEYS`. A request
-with an `X-API-Key` header skips the proxy's basic auth, and the API checks the key.
-An unknown key gets `401`.
+Requests without a valid key or access token get `401`. An unknown key gets `401` too.
 
 ### ZIP rules
 
 - One or more addon folders, each with `__manifest__.py` and `__init__.py`. The
   folders can be at the ZIP root or nested inside one folder.
-- 20 MB upload limit, 200 MB uncompressed, 5000 entries max.
+- No upload size limit. Extraction limits: `ZIP_MAX_UNCOMPRESSED_MB` (5120) and
+  `ZIP_MAX_ENTRIES` (100000), plus a compression ratio check against ZIP bombs.
 - No symlinks, absolute paths, `..`, or encrypted entries.
 - A full manifest version (`20.0.1.0.0`) must match the selected Odoo version.
 
@@ -137,16 +149,22 @@ Set these in the shell or in `.env` next to the compose files.
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `SANDBOX_DOMAIN` | `localhost` | Host name of the manager page. Sandboxes are served from its subdomains. |
+| `SANDBOX_DOMAIN` | `localhost` | Host name of the UI and API. Sandboxes are served from its subdomains. |
 | `LAB_URL_TEMPLATE` | `http://{id}.localhost:8080` | Sandbox URL returned by the API. `{id}` is the job ID without dashes. |
 | `SANDBOX_DATA_DIR` | `$PWD/data` | Absolute host path for runtime data. |
 | `PROXY_BIND` | `0.0.0.0:80` | Production only: the address the proxy listens on. |
 | `MAX_ACTIVE_PER_USER` | `2` | Sandboxes per user that are not `failed` or `deleted`. |
 | `MAX_ACTIVE_TOTAL` | `6` | Server-wide cap. Each sandbox can use up to 1.5 CPU and 2 GB RAM. |
 | `LAB_TTL_SECONDS` | `7200` | Seconds a sandbox stays available after it becomes ready. |
-| `ODOO_IMAGE_18` / `_19` / `_20` | `ghcr.io/imotif/odoo-ee:<version>` | Use a different Odoo image for a version. |
+| `ODOO_IMAGE_18` / `_19` / `_20` | `ghcr.io/imotif/odoo-ee:<version>` | Use a different Enterprise image for a version. |
+| `ODOO_COMMUNITY_IMAGE_18` / `_19` / `_20` | `odoo:<version>` | Use a different Community image for a version. |
+| `OIDC_TENANT_ID`, `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET` | empty | API only. Entra app used for sign-in. |
+| `OIDC_REDIRECT_URI` | `http://localhost:5173/auth/callback` | Must match the Web redirect URI in Entra. `https://` also makes cookies `Secure`. |
+| `ACCESS_TOKEN_TTL_SECONDS` | `900` | How long an access token lasts. |
+| `REFRESH_TOKEN_TTL_SECONDS` | `2592000` | Time without use (30 days) before Microsoft sign-in is required again. |
+| `UI_DIST_DIR` | none | Production only: absolute path of the `odoo-sandbox-ui` build (`dist`). |
 | `REGISTRY`, `REGISTRY_USER`, `REGISTRY_TOKEN` | `ghcr.io`, empty, empty | Worker only. Logs in to pull private images. For GHCR, use a token with `read:packages`. |
-| `SANDBOX_API_KEYS` | empty | Optional fixed `user:key,...` pairs. If this is set, requests without a key are rejected, which also disables the manager page. Prefer generated tokens. |
+| `SANDBOX_API_KEYS` | empty | Optional fixed `user:key,...` pairs. An `admin:<key>` entry is the way for scripts to manage tokens. |
 
 ## Production
 
@@ -163,11 +181,8 @@ Set these in the shell or in `.env` next to the compose files.
    cp .env.example .env    # set SANDBOX_DOMAIN, LAB_URL_TEMPLATE (https://{id}...), SANDBOX_DATA_DIR
    mkdir -p /srv/odoo-sandbox/data
    ```
-4. **Manager login:** the manager page and the API are protected by HTTP basic auth
-   at the proxy:
-   ```bash
-   docker run --rm httpd:alpine htpasswd -nbB fc1 'a-strong-password' >> proxy/htpasswd
-   ```
+4. **UI and sign-in:** run `npm run build` in `odoo-sandbox-ui`, set `UI_DIST_DIR` to
+   its `dist` folder, and add the production Web redirect URI in Entra.
 5. **Start:**
    ```bash
    docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
@@ -187,8 +202,7 @@ The worker pulls an image only when it is missing on the host.
   no internet access. This limits what an addon can do, but containers are not a
   strong boundary against hostile code.
 - Every sandbox uses `admin` / `admin`. The URL contains a random 128-bit job ID, so
-  anyone who has the link can log in. Share the links only with people who should
-  use them.
+  anyone who has the link can log in. Every signed-in user sees every link.
 
 ## Limitations
 
