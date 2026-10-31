@@ -39,7 +39,7 @@ tests/
   test_auth.py             Sign-in, session, role, and CSRF checks
 examples/
   ibase_billing_note.zip   Sample addon (Odoo 20.0)
-Dockerfile                 Image for api and worker (Python + docker CLI)
+Dockerfile                 Image for api and worker, published as taotoxicboy/odoo-sandbox:1
 docker-compose.yml         Local and production stack
 .env.example               Production settings
 data/                      Runtime state: SQLite DB, uploaded ZIPs, per-job logs (git-ignored)
@@ -50,7 +50,7 @@ data/                      Runtime state: SQLite DB, uploaded ZIPs, per-job logs
 Requirements: Docker Desktop (or Docker Engine) with Compose v2.
 
 ```bash
-docker compose up -d --build
+docker compose up -d
 ```
 
 - UI: run `npm run dev` in `odoo-sandbox-ui`, then open <http://localhost:5173>. Vite forwards `/api` and `/auth` to the proxy on port 8080.
@@ -183,7 +183,7 @@ Set these in the shell or in `.env` next to the compose files.
    pointing at this proxy, and add the production Web redirect URI in Entra.
 5. **Start:**
    ```bash
-   docker compose up -d --build
+   docker compose up -d
    ```
 
 To pre-pull the Odoo images and make the first job faster, run

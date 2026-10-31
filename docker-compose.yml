@@ -1,5 +1,5 @@
-# Local and production: docker compose up -d --build (settings: see .env.example)
-# API: http://localhost:8080/api   Sandboxes: http://<job id hex>.localhost:8080
+# docker compose up -d (settings: see .env.example)
+# Needs this file, .env, and proxy/default.conf.template on the host.
 name: odoo-sandbox
 
 x-env: &env
@@ -14,8 +14,7 @@ x-env: &env
   LAB_TTL_SECONDS: ${LAB_TTL_SECONDS:-7200}
 
 x-app: &app
-  build: .
-  image: odoo-sandbox-app
+  image: taotoxicboy/odoo-sandbox:1
   restart: unless-stopped
   environment: *env
   volumes:
@@ -34,8 +33,6 @@ services:
       ACCESS_TOKEN_TTL_SECONDS: ${ACCESS_TOKEN_TTL_SECONDS:-900}
       REFRESH_TOKEN_TTL_SECONDS: ${REFRESH_TOKEN_TTL_SECONDS:-2592000}
     command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
-    ports:
-      - "127.0.0.1:8000:8000"
 
   worker:
     <<: *app
